@@ -395,18 +395,15 @@ with tab3:
 with tab4:
     st.subheader("🚨 Журнал тревог")
 
-    if show_anomalies_only:
-        table_df = filtered_alarm_log
-    else:
-        table_df = filtered_alarm_log
+    table_df = filtered_alarm_log.copy()
 
-        if len(table_df) == 0:
-            st.info("По выбранным фильтрам тревог не найдено.")
-        else:
-            st.dataframe(
-                table_df,
-                use_container_width=True,
-                hide_index=True
+    if len(table_df) == 0:
+        st.info("По выбранным фильтрам тревог не найдено.")
+    else:
+        st.dataframe(
+            table_df,
+            use_container_width=True,
+            hide_index=True
         )
 
         csv_data = table_df.to_csv(index=False).encode("utf-8-sig")
@@ -417,8 +414,6 @@ with tab4:
             file_name="alarm_log_filtered.csv",
             mime="text/csv"
         )
-
-
 
     # ============================================================
     # 10. СВОДКА ПО ТИПАМ СОБЫТИЙ
