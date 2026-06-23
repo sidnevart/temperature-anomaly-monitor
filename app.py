@@ -323,6 +323,18 @@ with tab2:
 with tab3:
     st.subheader("🧠 Anomaly score")
 
+    st.markdown(
+        """
+        **Anomaly score** показывает степень подозрительности поведения датчика.  
+        Чем ближе значение к **1**, тем более нетипичным считается участок.
+        
+        Условная интерпретация:
+        - **0.00–0.60** — нормальное или слабо подозрительное поведение;
+        - **0.60–0.85** — зона предупреждения;
+        - **выше 0.85** — высокий риск.
+        """
+    )
+
     score_fig = px.line(
         filtered_df,
         x="timestamp",
@@ -336,9 +348,47 @@ with tab3:
         }
     )
 
+    # Линия уровня Warning
+    score_fig.add_hline(
+        y=0.60,
+        line_dash="dash",
+        annotation_text="Warning threshold",
+        annotation_position="top left"
+    )
+
+    # Линия уровня High
+    score_fig.add_hline(
+        y=0.85,
+        line_dash="dash",
+        annotation_text="High threshold",
+        annotation_position="top left"
+    )
+
+    # Точки финальных аномалий
+    score_anomalies = filtered_df[filtered_df["final_anomaly"] == 1]
+
+    score_fig.add_scatter(
+        x=score_anomalies["timestamp"],
+        y=score_anomalies["anomaly_score_norm"],
+        mode="markers",
+        marker=dict(size=8, color="red"),
+        name="Финальные аномалии",
+        text=score_anomalies["sensor_id"],
+        hovertemplate=(
+            "Датчик: %{text}<br>"
+            "Время: %{x}<br>"
+            "Anomaly score: %{y:.3f}<br>"
+            "<extra></extra>"
+        )
+    )
+
+    score_fig.update_layout(
+        hovermode="x unified",
+        yaxis_title="Anomaly score",
+        xaxis_title="Время"
+    )
+
     st.plotly_chart(score_fig, use_container_width=True)
-
-
 # ============================================================
 # 9. ЖУРНАЛ ТРЕВОГ
 # ============================================================
