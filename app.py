@@ -352,7 +352,7 @@ with tab3:
     score_fig.add_hline(
         y=0.60,
         line_dash="dash",
-        annotation_text="Warning threshold",
+        annotation_text="Порог предупреждения",
         annotation_position="top left"
     )
 
@@ -360,7 +360,7 @@ with tab3:
     score_fig.add_hline(
         y=0.85,
         line_dash="dash",
-        annotation_text="High threshold",
+        annotation_text="Высокий порог",
         annotation_position="top left"
     )
 
