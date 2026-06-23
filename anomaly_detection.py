@@ -117,8 +117,8 @@ df["rolling_temp_diff_mean_20"] = (
 
 # Если температура долго растет, это может быть предаварийный тренд
 mask_slow_growth = (
-    (df["rolling_temp_diff_mean_20"] > 0.07) &
-    (df["temperature_filled"] > df["rolling_mean"])
+    (df["rolling_temp_diff_mean_20"] > 0.10) &
+    (df["temperature_filled"] > df["rolling_mean"] + 1)
 )
 
 df.loc[mask_slow_growth, "rule_anomaly"] = 1
