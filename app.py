@@ -400,14 +400,24 @@ with tab4:
     else:
         table_df = filtered_alarm_log
 
-    if len(table_df) == 0:
-        st.info("По выбранным фильтрам тревог не найдено.")
-    else:
-        st.dataframe(
-            table_df,
-            use_container_width=True,
-            hide_index=True
+        if len(table_df) == 0:
+            st.info("По выбранным фильтрам тревог не найдено.")
+        else:
+            st.dataframe(
+                table_df,
+                use_container_width=True,
+                hide_index=True
         )
+
+        csv_data = table_df.to_csv(index=False).encode("utf-8-sig")
+
+        st.download_button(
+            label="⬇️ Скачать журнал тревог",
+            data=csv_data,
+            file_name="alarm_log_filtered.csv",
+            mime="text/csv"
+        )
+
 
 
     # ============================================================
