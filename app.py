@@ -2,6 +2,8 @@ import pandas as pd
 import streamlit as st
 import plotly.express as px
 
+from preprocessing import preprocess_data
+from anomaly_detection import detect_anomalies
 
 # ============================================================
 # 1. НАСТРОЙКИ СТРАНИЦЫ
@@ -19,7 +21,7 @@ st.set_page_config(
 # ============================================================
 
 @st.cache_data
-def load_data():
+def load_demo_data():
     results = pd.read_csv("temperature_anomaly_results.csv")
     alarms = pd.read_csv("alarm_log.csv")
 
@@ -29,7 +31,88 @@ def load_data():
     return results, alarms
 
 
-df, alarm_log = load_data()
+def validate_user_data(df):
+    """
+    Проверяет, подходит ли пользовательский CSV для анализа.
+    """
+
+    required_columns = ["timestamp", "sensor_id", "temperature"]
+
+    missing_columns = [
+        col for col in required_columns
+        if col not in df.columns
+    ]
+
+    if missing_columns:
+        return False, missing_columns
+
+    return True, []
+
+
+st.sidebar.header("📂 Источник данных")
+
+data_source = st.sidebar.radio(
+    "Выберите режим:",
+    ["Демонстрационные данные", "Загрузить свой CSV"]
+)
+
+if data_source == "Демонстрационные данные":
+    df, alarm_log = load_demo_data()
+    st.sidebar.info("Используются демонстрационные данные проекта.")
+
+else:
+    uploaded_file = st.sidebar.file_uploader(
+        "Загрузите CSV-файл",
+        type=["csv"]
+    )
+
+    if uploaded_file is None:
+        st.warning("Загрузите CSV-файл для анализа.")
+        st.stop()
+
+    raw_df = pd.read_csv(uploaded_file)
+
+    is_valid, missing_columns = validate_user_data(raw_df)
+
+    if not is_valid:
+        st.error(
+            f"В файле не хватает обязательных колонок: {missing_columns}"
+        )
+
+        st.markdown(
+            """
+            Файл должен содержать минимум три колонки:
+
+            ```text
+            timestamp, sensor_id, temperature
+            ```
+
+            Пример:
+
+            ```csv
+            timestamp,sensor_id,temperature
+            2026-06-24 10:00:00,T-01,70.5
+            2026-06-24 10:01:00,T-01,70.8
+            2026-06-24 10:02:00,T-01,71.1
+            ```
+            """
+        )
+
+        st.stop()
+
+    try:
+        preprocessed_df = preprocess_data(raw_df)
+        df, alarm_log = detect_anomalies(preprocessed_df)
+
+        df["timestamp"] = pd.to_datetime(df["timestamp"])
+        alarm_log["Время"] = pd.to_datetime(alarm_log["Время"])
+
+        st.sidebar.success("CSV успешно загружен и проанализирован.")
+
+    except Exception as error:
+        st.error("Во время анализа файла произошла ошибка.")
+        st.exception(error)
+        st.stop()
 
 
 # ============================================================
@@ -98,7 +181,10 @@ else:
     selected_scenarios = None
 
 
-risk_levels = sorted(alarm_log["Уровень"].unique())
+if len(alarm_log) > 0:
+    risk_levels = sorted(alarm_log["Уровень"].unique())
+else:
+    risk_levels = []
 
 selected_risk_levels = st.sidebar.multiselect(
     "Уровень тревоги:",
@@ -122,10 +208,13 @@ if scenario_column is not None and selected_scenarios is not None:
         filtered_df[scenario_column].isin(selected_scenarios)
     ].copy()
 
-filtered_alarm_log = alarm_log[
-    (alarm_log["Датчик"].isin(selected_sensors)) &
-    (alarm_log["Уровень"].isin(selected_risk_levels))
-].copy()
+if len(alarm_log) > 0:
+    filtered_alarm_log = alarm_log[
+        (alarm_log["Датчик"].isin(selected_sensors)) &
+        (alarm_log["Уровень"].isin(selected_risk_levels))
+    ].copy()
+else:
+    filtered_alarm_log = alarm_log.copy()
 
 # Применяем фильтр сценариев к журналу тревог
 if "Истинный_сценарий" in filtered_alarm_log.columns and selected_scenarios is not None:
@@ -389,6 +478,7 @@ with tab3:
     )
 
     st.plotly_chart(score_fig, use_container_width=True)
+
 # ============================================================
 # 9. ЖУРНАЛ ТРЕВОГ
 # ============================================================
@@ -414,7 +504,14 @@ with tab4:
             file_name="alarm_log_filtered.csv",
             mime="text/csv"
         )
+    results_csv = filtered_df.to_csv(index=False).encode("utf-8-sig")
 
+    st.download_button(
+        label="⬇️ Скачать полный результат анализа",
+        data=results_csv,
+        file_name="temperature_anomaly_results_filtered.csv",
+        mime="text/csv"
+    )
     # ============================================================
     # 10. СВОДКА ПО ТИПАМ СОБЫТИЙ
     # ============================================================
@@ -449,19 +546,20 @@ with tab5:
     st.subheader("ℹ️ Описание работы MVP")
 
     st.markdown(
-        """
-        В данном MVP используются синтетические температурные данные.
-        Нормальный режим моделируется как сочетание базовой температуры,
-        плавных технологических колебаний и случайного шума.
+    """
+    ### Режим анализа пользовательских данных
 
-        Обнаружение аномалий выполняется двумя способами:
+    Пользователь может загрузить собственный CSV-файл с температурными данными.
+    Файл должен содержать колонки:
 
-        1. **Правилами** — резкие скачки, пропуски сигнала, зависание датчика,
-        отклонение от группы датчиков.
-        2. **ИИ-моделью Isolation Forest** — поиск нетипичных комбинаций признаков.
+    - `timestamp` — дата и время измерения;
+    - `sensor_id` — идентификатор датчика;
+    - `temperature` — температура.
 
-        Система не управляет технологическим процессом и не заменяет оператора.
-        Она предназначена для раннего выявления подозрительных температурных трендов
-        и поддержки принятия решений.
-        """
-    )
+    После загрузки система выполняет предобработку, рассчитывает признаки,
+    применяет правила и модель Isolation Forest, а затем формирует журнал тревог.
+
+    Если пользовательские данные не содержат колонку `scenario`,
+    система автоматически помечает их как `user_data`.
+    """
+)
