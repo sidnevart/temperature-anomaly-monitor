@@ -8,6 +8,32 @@ from sklearn.ensemble import IsolationForest
 from sklearn.preprocessing import StandardScaler
 
 
+# Единое место настройки порогов правил. Меняйте значения здесь, а не в теле
+# функций. Пороги подобраны так, чтобы минимум ложных тревог на штатном режиме
+# при сохранении высокого полноты по реальным сценариям (см. tests/test_rule_accuracy.py).
+RULE_PARAMS = {
+    "sharp_jump_diff": 5.0,      # |Δt| между соседними точками, °C
+    "z_score": 3.0,             # отклонение от среднего датчика
+    "group_deviation": 8.0,      # отклонение от среднего по группе датчиков, °C
+    "overheat_window": 20,      # окно для наклона (устойчивый перегрев), точки
+    "overheat_slope": 0.12,     # наклон rolling_mean, °C/точку
+}
+
+
+def _rolling_slope(series, window):
+    """Скользящий наклон линии тренда (линейная регрессия по окну).
+
+    Считается по сглаженному rolling_mean (а не по сырой температуре), чтобы
+    шум не порождал ложных срабатываний. Возвращает NaN, пока окно не накопилось.
+    """
+    def _slope(y):
+        if len(y) < window:
+            return np.nan
+        x = np.arange(len(y), dtype=float)
+        return np.polyfit(x, y, 1)[0]
+    return series.rolling(window=window, min_periods=window).apply(_slope, raw=True)
+
+
 def _load_or_fit_iforest(X, model_dir="models"):
     """Возвращает (X_scaled, predictions, score_raw, used_saved_model).
 
@@ -77,7 +103,7 @@ def detect_anomalies(df, model_dir="models"):
     )
 
     # Резкий скачок температуры
-    mask_sharp_jump = df["abs_temp_diff"] > 5
+    mask_sharp_jump = df["abs_temp_diff"] > RULE_PARAMS["sharp_jump_diff"]
 
     df.loc[mask_sharp_jump, "rule_anomaly"] = 1
     df.loc[mask_sharp_jump, "rule_event_type"] = "Резкий скачок температуры"
@@ -87,7 +113,7 @@ def detect_anomalies(df, model_dir="models"):
     )
 
     # Сильное отклонение от обычного режима датчика
-    mask_z_score = df["abs_z_score"] > 3
+    mask_z_score = df["abs_z_score"] > RULE_PARAMS["z_score"]
 
     df.loc[mask_z_score, "rule_anomaly"] = 1
     df.loc[mask_z_score, "rule_event_type"] = "Сильное отклонение от нормы"
@@ -107,7 +133,7 @@ def detect_anomalies(df, model_dir="models"):
     )
 
     # Отклонение от группы датчиков
-    mask_group_deviation = df["abs_diff_from_group_mean"] > 8
+    mask_group_deviation = df["abs_diff_from_group_mean"] > RULE_PARAMS["group_deviation"]
 
     df.loc[mask_group_deviation, "rule_anomaly"] = 1
     df.loc[mask_group_deviation, "rule_event_type"] = "Отклонение от группы датчиков"
@@ -116,21 +142,31 @@ def detect_anomalies(df, model_dir="models"):
         "Сравнить показания с соседними температурными каналами"
     )
 
-    # Медленный перегрев / устойчивый рост
+    # Медленный перегрев / устойчивый рост.
+    # rolling_temp_diff_mean_20 остаётся как признак для Isolation Forest.
     df["rolling_temp_diff_mean_20"] = (
         df.groupby("sensor_id")["temp_diff"]
         .transform(lambda x: x.rolling(window=20, min_periods=1).mean())
     )
 
-    mask_slow_growth = (
-        (df["rolling_temp_diff_mean_20"] > 0.10) &
-        (df["temperature_filled"] > df["rolling_mean"] + 1)
+    # Наклон сглаженной температуры ловит устойчивый перегрев, который простые
+    # пороги пропускают (slow_overheating, correlated_growth). Считается по
+    # сглаженному rolling_mean, чтобы шум не порождал ложных срабатываний.
+    # Медленный дрейф датчика (sensor_drift) этим правилом намеренно не ловится:
+    # его наклон ниже пика нормальной синусоиды, поэтому правилом от нормы не
+    # отделить — его берёт на себя Isolation Forest (см. train_model.py).
+    df["temp_slope_overheat"] = (
+        df.groupby("sensor_id")["rolling_mean"]
+        .transform(lambda x: _rolling_slope(x, window=RULE_PARAMS["overheat_window"]))
     )
 
-    df.loc[mask_slow_growth, "rule_anomaly"] = 1
-    df.loc[mask_slow_growth, "rule_event_type"] = "Медленный рост температуры"
-    df.loc[mask_slow_growth, "rule_risk_level"] = "Warning"
-    df.loc[mask_slow_growth, "rule_recommendation"] = (
+    # Устойчивый перегрев — крутой наклон на коротком окне (slow_overheating,
+    # correlated_growth).
+    mask_overheat = df["temp_slope_overheat"] > RULE_PARAMS["overheat_slope"]
+    df.loc[mask_overheat, "rule_anomaly"] = 1
+    df.loc[mask_overheat, "rule_event_type"] = "Устойчивый перегрев"
+    df.loc[mask_overheat, "rule_risk_level"] = "Warning"
+    df.loc[mask_overheat, "rule_recommendation"] = (
         "Проверить устойчивость роста температуры и сравнить с соседними датчиками"
     )
 
