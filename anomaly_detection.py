@@ -1,11 +1,48 @@
+import os
+
 import pandas as pd
 import numpy as np
 
+from joblib import load
 from sklearn.ensemble import IsolationForest
 from sklearn.preprocessing import StandardScaler
 
 
-def detect_anomalies(df):
+def _load_or_fit_iforest(X, model_dir="models"):
+    """Возвращает (X_scaled, predictions, score_raw, used_saved_model).
+
+    Если в model_dir есть обученная модель (scaler.joblib + iforest.joblib,
+    см. train_model.py) — используется она: только transform/predict, без fit.
+    Это и есть работа с обученной моделью без data leakage.
+
+    Иначе — fallback: модель обучается на лету на тех же данных, что оценивает.
+    Так приложение остаётся рабочим для пользовательских CSV без обученной
+    модели, но для демонстрационных/проектных данных лучше заранее запустить
+    train_model.py.
+    """
+    path_scaler = os.path.join(model_dir, "scaler.joblib")
+    path_model = os.path.join(model_dir, "iforest.joblib")
+    if os.path.exists(path_scaler) and os.path.exists(path_model):
+        scaler = load(path_scaler)
+        model = load(path_model)
+        X_scaled = scaler.transform(X)
+        predictions = model.predict(X_scaled)
+        score_raw = model.decision_function(X_scaled)
+        return X_scaled, predictions, score_raw, True
+
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
+    model = IsolationForest(
+        n_estimators=200,
+        contamination=0.08,
+        random_state=42
+    ).fit(X_scaled)
+    predictions = model.predict(X_scaled)
+    score_raw = model.decision_function(X_scaled)
+    return X_scaled, predictions, score_raw, False
+
+
+def detect_anomalies(df, model_dir="models"):
     """
     Обнаружение температурных аномалий.
 
@@ -116,19 +153,14 @@ def detect_anomalies(df):
 
     X = df[feature_columns].replace([np.inf, -np.inf], np.nan).fillna(0)
 
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
-
-    model = IsolationForest(
-        n_estimators=200,
-        contamination=0.08,
-        random_state=42
+    X_scaled, iforest_prediction, iforest_score_raw, _used_saved = (
+        _load_or_fit_iforest(X, model_dir=model_dir)
     )
 
-    df["iforest_prediction"] = model.fit_predict(X_scaled)
+    df["iforest_prediction"] = iforest_prediction
     df["iforest_anomaly"] = (df["iforest_prediction"] == -1).astype(int)
 
-    df["iforest_score_raw"] = model.decision_function(X_scaled)
+    df["iforest_score_raw"] = iforest_score_raw
     df["anomaly_score"] = -df["iforest_score_raw"]
 
     min_score = df["anomaly_score"].min()

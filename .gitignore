@@ -216,3 +216,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Trained model artifacts (train_model.py)
+models/*.joblib
+models/*.json
+!models/.gitkeep
