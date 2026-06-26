@@ -2,7 +2,15 @@ import pandas as pd
 import numpy as np
 
 
-def preprocess_data(df):
+# Параметры предобработки (вынесены из тела функции — единая точка настройки).
+# Подобраны так, чтобы работать и на синтетике (несколько датчиков), и на реальных
+# одноканальных трендовых данных (Т2.csv). См. tests/ и issue по объединению mod_AI_2.
+ROLLING_WINDOW = 10        # окно скользящих признаков, точек
+STUCK_MIN_RUN = 10        # сколько подряд одинаковых значений считать зависанием
+STUCK_ABS_TOL = 1e-6       # точное равенство для зависания (ступени квантования не ловим)
+
+
+def preprocess_data(df, rolling_window=ROLLING_WINDOW):
     """
     Предобработка температурных данных.
 
@@ -54,7 +62,7 @@ def preprocess_data(df):
     df["temperature_filled"] = df["temperature_filled"].fillna(0)
 
     # Скользящие признаки
-    window_size = 10
+    window_size = rolling_window
 
     df["rolling_mean"] = (
         df.groupby("sensor_id")["temperature_filled"]
@@ -66,7 +74,9 @@ def preprocess_data(df):
         .transform(lambda x: x.rolling(window=window_size, min_periods=1).std())
     )
 
-    df["rolling_std"] = df["rolling_std"].fillna(0)
+    # 0/std на ранних точках (окно не накопилось) -> маленькая константа, чтобы
+    # z-score не взрывался в inf.
+    df["rolling_std"] = df["rolling_std"].fillna(0).replace(0, 1e-6)
 
     # Скорость изменения температуры
     df["temp_diff"] = (
@@ -77,36 +87,60 @@ def preprocess_data(df):
 
     df["abs_temp_diff"] = df["temp_diff"].abs()
 
-    # Z-score внутри каждого датчика
-    sensor_mean = df.groupby("sensor_id")["temperature_filled"].transform("mean")
-    sensor_std = df.groupby("sensor_id")["temperature_filled"].transform("std")
-
-    df["z_score"] = (df["temperature_filled"] - sensor_mean) / sensor_std
+    # Z-score: скользящий (локальный) — отклонение от собственного rolling_mean.
+    # Раньше считался по глобальному среднему всего датчика: на растущем реальном
+    # сигнале (Т2.csv: 49->109 °C) весь верхний полубас уходил в аномалию. Скользящий
+    # z-score адаптируется к тренду и ловит локальные выбросы, а не сам тренд.
+    df["z_score"] = (df["temperature_filled"] - df["rolling_mean"]) / df["rolling_std"]
     df["z_score"] = df["z_score"].replace([np.inf, -np.inf], 0).fillna(0)
     df["abs_z_score"] = df["z_score"].abs()
 
-    # Признак зависания датчика
-    stuck_window = 15
-    stuck_threshold = 0.05
+    # Признак зависания датчика: точное равенство подряд STUCK_MIN_RUN значений.
+    # Пороговый критерий (|Δt|<0.05 за окно 15) ловил ступени квантования АЦП
+    # реальных данных как зависание — тысячи ложных тревог. Точное равенство
+    # срабатывает только на по-настоящему застывшем сигнале.
+    is_stuck = np.zeros(len(df), dtype=int)
+    for _sid, idx in df.groupby("sensor_id").groups.items():
+        vals = df.loc[idx, "temperature_filled"].to_numpy()
+        run = 0
+        prev = None
+        for j, i in enumerate(idx):
+            v = vals[j]
+            if (
+                prev is not None
+                and not (np.isnan(v) or np.isnan(prev))
+                and abs(v - prev) < STUCK_ABS_TOL
+            ):
+                run += 1
+            else:
+                run = 0
+            if run >= STUCK_MIN_RUN:
+                is_stuck[i] = 1
+            prev = v
+    df["is_stuck"] = is_stuck
 
-    df["small_change"] = (df["abs_temp_diff"] < stuck_threshold).astype(int)
-
+    # Совместимость со старыми выходами: small_change/stuck_score сохранены
+    # (используются в отчётах), но is_stuck теперь считается точным равенством.
+    df["small_change"] = (df["abs_temp_diff"] < 0.05).astype(int)
     df["stuck_score"] = (
         df.groupby("sensor_id")["small_change"]
-        .transform(lambda x: x.rolling(window=stuck_window, min_periods=1).sum())
+        .transform(lambda x: x.rolling(window=15, min_periods=1).sum())
     )
 
-    df["is_stuck"] = (df["stuck_score"] >= 14).astype(int)
-
-    # Отклонение от группы датчиков
-    df["mean_temp_all_sensors"] = (
-        df.groupby("timestamp")["temperature_filled"]
-        .transform("mean")
-    )
-
-    df["diff_from_group_mean"] = (
-        df["temperature_filled"] - df["mean_temp_all_sensors"]
-    )
+    # Отклонение от группы. Для одного датчика кросс-сенсорное среднее равно самому
+    # значению (отклонение 0, правило мёртвое). Поэтому при одном датчике берём
+    # отклонение от собственного rolling_mean (подход mod_AI_2) — оно осмысленно.
+    if df["sensor_id"].nunique() > 1:
+        df["mean_temp_all_sensors"] = (
+            df.groupby("timestamp")["temperature_filled"]
+            .transform("mean")
+        )
+        df["diff_from_group_mean"] = (
+            df["temperature_filled"] - df["mean_temp_all_sensors"]
+        )
+    else:
+        df["mean_temp_all_sensors"] = df["rolling_mean"]
+        df["diff_from_group_mean"] = df["temperature_filled"] - df["rolling_mean"]
 
     df["abs_diff_from_group_mean"] = df["diff_from_group_mean"].abs()
 
