@@ -221,3 +221,6 @@ __marimo__/
 models/*.joblib
 models/*.json
 !models/.gitkeep
+
+# Generated canonical real data (data_adapters.py)
+real_temperature_data.csv
