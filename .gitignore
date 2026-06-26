@@ -216,3 +216,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Generated canonical real data (data_adapters.py)
+real_temperature_data.csv
