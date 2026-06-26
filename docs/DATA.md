@@ -1,0 +1,51 @@
+# Данные
+
+В проекте два источника данных: реальные (`Т2.csv`) и синтетические
+(генерируются `Data.py`).
+
+## Т2.csv — реальные данные
+
+- Источник: один реальный температурный датчик.
+- Схема: `time_s` (секунды от начала), `temp_C` (°C).
+- Один датчик, без `sensor_id`, без `timestamp`, без `scenario`.
+- Диапазон: 49–109 °C, ~1.5 часа наблюдения, ~5400 точек.
+- **Не ложится в пайплайн напрямую** — нужен адаптер
+  `data_adapters.load_t2()` (приводит к `timestamp, sensor_id, temperature,
+  scenario='user_data'`).
+- Вариант файла без переносов строк обрабатывается regex-fallback
+  `_parse_glued_body`.
+
+## Синтетические данные (Data.py)
+
+`Data.py` генерирует 6 датчиков (`T-01`…`T-06`) по 8 часов (шаг 1 мин) с
+базовой температурой ~70 °C, шумом σ=1 °C и плавной синусоидой (период 3 ч). В
+отдельные датчики вшиты аномалии с меткой в колонке `scenario`:
+
+| `scenario` | Датчик | Что вшито |
+|---|---|---|
+| `normal` | все | штатный режим |
+| `sharp_jump` | T-02 | резкий скачок +15 °C |
+| `slow_overheating` | T-03 | плавный рост +12 °C |
+| `sensor_drift` | T-04 | линейный дрейф +10 °C |
+| `stuck_sensor` | T-05 | застывшее значение |
+| `high_noise` | T-06 | сильный шум σ=5 °C |
+| `signal_loss` | T-06 | пропуски (NaN) |
+| `correlated_growth` | T-02, T-03 | коррелированный рост в конце |
+
+`scenario` служит **ground truth** для оценки качества (аномалия =
+`scenario != 'normal'`) в `train_model.evaluate()` и в тестах.
+
+## Производные файлы
+
+| Файл | Откуда |
+|---|---|
+| `synthetic_temperature_data.csv` | `Data.py` |
+| `preprocessed_temperature_data.csv` | `preprocessing.py` |
+| `temperature_anomaly_results.csv` | `anomaly_detection.py` (полные результаты) |
+| `alarm_log.csv` | `anomaly_detection.py` (только тревоги) |
+| `real_temperature_data.csv` | `data_adapters.py` (канонический вид Т2.csv; в git не попадает) |
+
+> ⚠️ `temperature_anomaly_results.csv` и `alarm_log.csv` закоммичены только как
+> готовые демо-данные для дашборда. При изменении правил/модели их нужно
+> регенерировать (`python preprocessing.py && python anomaly_detection.py`).
+> Вынос больших артефактов из git — в отдельном issue.
